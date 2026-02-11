@@ -20,6 +20,32 @@ def guassianEnsemble (N): # returns a gue matrix m
             m[j][i] = np.conj(n)
     return m
 
+def ising (N, J=1.0, hx=1.0, hz=0.5): #returns a mixed-field Ising Hamiltonian (open chain)
+    sx = np.array([[0.0, 1.0], [1.0, 0.0]])
+    sz = np.array([[1.0, 0.0], [0.0, -1.0]])
+    ident = np.eye(2)
+
+    def build_op(ops_by_site):
+        op = np.array([[1.0]])
+        for site in range(N):
+            op = np.kron(op, ops_by_site.get(site, ident))
+        return op
+
+    dim = 2**N
+    h = np.zeros((dim, dim))
+
+    for i in range(N - 1):
+        h += J * build_op({i: sz, i + 1: sz})
+
+    for i in range(N):
+        if hx != 0.0:
+            h += hx * build_op({i: sx})
+        if hz != 0.0:
+            h += hz * build_op({i: sz})
+
+    return h
+
+
 def gueEigenstate(m): # return a random eigenstate of a gue matrix m, excluding the first and last eigenstates
     eigvals, eigvecs = np.linalg.eigh(m)
     index = np.random.randint(1, len(eigvals)-1)
@@ -127,6 +153,38 @@ def computeGUE(N, Nsamples):
     plt.xlabel (r'nA')
     plt.ylabel (r'Average Entanglement Entropy')
     
+    plt.grid(True)
+    plt.show()
+
+def computeIsing(N, Nsamples, J=1.0, hx=1.0, hz=0.5):
+    Savg = np.zeros(N + 1)
+
+    for sample in range(Nsamples):
+        h = ising(N, J=J, hx=hx, hz=hz)
+        eigvals, eigvecs = np.linalg.eigh(h)
+        index = np.random.randint(1, len(eigvals) - 1)
+        psi = eigvecs[:, index]
+
+        for nA in range(N + 1):
+            Savg[nA] += entropy(psi, nA, N)
+
+    Savg /= Nsamples
+
+    pageApp = np.zeros(N + 1)
+    for i in range(N + 1):
+        pageApp[i] = pageApproximation(i, N)
+    maxVal = np.zeros(N + 1)
+    for i in range(N + 1):
+        maxVal[i] = i if i <= N - i else N - i
+
+    plt.figure(figsize=(8, 8))
+    plt.plot(Savg / np.log(2), marker="o", linestyle="-")
+    plt.plot(pageApp / np.log(2), linestyle="-", color="blue")
+    plt.plot(maxVal / np.log(2), linestyle="-", color="yellow")
+
+    plt.xlabel(r"nA")
+    plt.ylabel(r"Average Entanglement Entropy")
+
     plt.grid(True)
     plt.show()
 
