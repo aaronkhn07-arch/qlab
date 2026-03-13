@@ -32,83 +32,135 @@ def entropy(psi, n_A, N):
 #     return 
 
 def pxp_bitwise(N):
-    dim = 1 << L
-
-def make_ising_linop(L, J=1.0, hx=1.0, hz=0.5, dtype=np.complex128):
-    dim = 1 << L
-
-    # Precompute diagonal energies for every computational basis state
-    diagE = np.empty(dim, dtype=np.float64)
-
-    # z_i = +1 if bit i == 0, else -1 (convention consistent with sz diag [1, -1])
-    # i = 0 is least-significant bit site.
+    dim = 1 << N
+    h = np.zeros((dim, dim), dtype=np.float64)
     for s in range(dim):
-        # local z's
-        z = np.empty(L, dtype=np.int8)
+        for i in range(N):
+            left_ok = (i == 0) or (((s >> (i - 1)) & 1) == 0) # check left neighbor
+            right_ok = (i == L - 1) or (((s >> (i + 1)) & 1) == 0) # check right neighbor
+            if left_ok and right_ok:
+                sf = s ^ (1 << i) # flip the ith bit
+                h[sf, s] += 1.0
+    return h
+
+
+def mf_ising(
+    L: int, J: float = 1.0, hx: float = 1.0, hz: float = 0.5
+) -> np.ndarray:
+    """Mixed-field Ising H = J sum_i Z_i Z_{i+1} + hx sum_i X_i + hz sum_i Z_i."""
+    dim = 1 << L
+    h = np.zeros((dim, dim), dtype=np.float64)
+
+    for s in range(dim):
+        e_diag = 0.0
+        for i in range(L - 1):
+            zi = 1.0 if ((s >> i) & 1) == 0 else -1.0
+            zip1 = 1.0 if ((s >> (i + 1)) & 1) == 0 else -1.0
+            e_diag += J * zi * zip1
         for i in range(L):
-            z[i] = 1 if ((s >> i) & 1) == 0 else -1
+            zi = 1.0 if ((s >> i) & 1) == 0 else -1.0
+            e_diag += hz * zi
+            sf = s ^ (1 << i)
+            h[sf, s] += hx
+        h[s, s] += e_diag
+    return h
 
-        e = 0.0
-        if hz != 0.0:
-            e += hz * np.sum(z)
-        if J != 0.0:
-            e += J * np.sum(z[:-1] * z[1:])
-        diagE[s] = e
 
-    # Precompute flip indices for hx term
-    flips = [np.arange(dim, dtype=np.int64) ^ (1 << i) for i in range(L)]
+def z2_state(L: int) -> np.ndarray:
+    """|Z2> = |1010...10> for even L."""
+    dim = 1 << L
+    state_index = 0
+    for i in range(L):
+        if i % 2 == 0:
+            state_index |= 1 << i # set the ith bit to 1 for even i
+    psi = np.zeros(dim, dtype=np.complex128)
+    psi[state_index] = 1.0
+    return psi
 
-    def matvec(v):
-        v = v.astype(dtype, copy=False)
-        out = (diagE * v).astype(dtype, copy=False)
 
-        if hx != 0.0:
-            # For each site i: (σ^x_i v)[s] = v[s ^ (1<<i)]
-            # So contribution to out is hx * v[flip]
-            for i in range(L):
-                out += hx * v[flips[i]]
-        return out
+def precompute_diag(L: int) -> np.ndarray:
+    """Diagonal entries of mean domain-wall density operator."""
+    dim = 1 << L
+    dw = np.zeros(dim, dtype=np.float64)
+    for s in range(dim):
+        total = 0.0
+        for i in range(L - 1):
+            zi = 1.0 if ((s >> i) & 1) == 0 else -1.0 # +1 for spin up, -1 for spin down
+            zip1 = 1.0 if ((s >> (i + 1)) & 1) == 0 else -1.0 #
+            total += 0.5 * (1.0 - zi * zip1)
+        dw[s] = total / (L - 1)
+    return dw
 
-    return LinearOperator((dim, dim), matvec=matvec, dtype=dtype)
 
-def ground_state(L, J=1.0, hx=1.0, hz=0.5):
-    H = make_ising_linop(L, J=J, hx=hx, hz=hz)
-    # k=1, smallest algebraic eigenvalue
-    vals, vecs = eigsh(H, k=1, which="SA")
-    psi0 = vecs[:, 0]
-    # normalize (eigsh should already, but cheap safety)
-    psi0 /= np.linalg.norm(psi0)
-    return vals[0], psi0
+def half_chain_entropy(psi: np.ndarray, L: int, eps: float = 1e-14) -> float:
+    n_a = L // 2
+    mat = psi.reshape((1 << n_a, 1 << (L - n_a)))
+    svals = np.linalg.svd(mat, compute_uv=False)
+    probs = svals * svals
+    probs = probs[probs > eps]
+    return float(-np.sum(probs * np.log(probs)))
 
-def computeIsing_fast(N, Nsamples, J=1.0, hx=1.0, hz=0.5, Nmin=6):
-    # Nsamples is ignored unless you introduce randomness; kept for API compatibility
-    sizes = list(range(Nmin, N + 1))
-    curves = []
 
-    for L in sizes:
-        E0, psi0 = ground_state(L, J=J, hx=hx, hz=hz)
+def evolve_and_measure(
+    hamiltonian: np.ndarray, psi0: np.ndarray, times: np.ndarray, domain_wall_diag: np.ndarray, L: int
+) -> tuple[np.ndarray, np.ndarray]:
+    evals, evecs = np.linalg.eigh(hamiltonian)
+    coeffs0 = evecs.conj().T @ psi0
 
-        S = np.zeros(L + 1)
-        # endpoints are exactly 0; and S(nA)=S(L-nA), so compute half
-        S[0] = 0.0
-        S[L] = 0.0
-        for nA in range(1, L // 2 + 1):
-            val = entropy(psi0, nA, L)
-            S[nA] = val
-            S[L - nA] = val
+    dw_curve = np.empty_like(times, dtype=np.float64)
+    ent_curve = np.empty_like(times, dtype=np.float64)
 
-        curves.append((L, E0, S))
+    for ti, t in enumerate(times):
+        phase = np.exp(-1j * evals * t)
+        psi_t = evecs @ (phase * coeffs0)
+        probs = np.abs(psi_t) ** 2
+        dw_curve[ti] = float(np.dot(probs, domain_wall_diag))
+        ent_curve[ti] = half_chain_entropy(psi_t, L)
+    return dw_curve, ent_curve
 
-    plt.figure(figsize=(8, 8))
-    for L, E0, S in curves:
-        x = np.arange(L + 1) / L
-        plt.plot(x, S / np.log(2), marker="o", linestyle="-", label=f"N={L}")
 
-    plt.xlabel(r"$n_A/N$")
-    plt.ylabel(r"$S(n_A)$ (bits)")
-    plt.grid(True)
-    plt.legend()
+def quench(
+    L: int = 12, t_max: float = 30.0, n_times: int = 1201, J: float = 1.0, hx: float = 1.0, hz: float = 0.5
+) -> None:
+    times = np.linspace(0.0, t_max, n_times)
+    psi0 = z2_state(L)
+    domain_wall_diag = precompute_diag(L)
+
+    h_pxp = pxp_bitwise(L)
+    h_ising = mf_ising(L, J=J, hx=hx, hz=hz)
+
+    dw_pxp, s_pxp = evolve_and_measure(h_pxp, psi0, times, domain_wall_diag, L)
+    dw_ising, s_ising = evolve_and_measure(h_ising, psi0, times, domain_wall_diag, L)
+
+    np.savez(
+        "quench_L12_data.npz",
+        times=times,
+        domain_wall_pxp=dw_pxp,
+        entanglement_pxp=s_pxp,
+        domain_wall_ising=dw_ising,
+        entanglement_ising=s_ising,
+    )
+
+    fig, axes = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+
+    axes[0].plot(times, dw_pxp, label="PXP", lw=2)
+    axes[0].plot(times, dw_ising, label="Mixed-field Ising", lw=2)
+    axes[0].set_ylabel("Domain wall density")
+    axes[0].set_title(f"Quench from |Z2>, L={L}, t in [0, {t_max}]")
+    axes[0].grid(alpha=0.3)
+    axes[0].legend()
+
+    axes[1].plot(times, s_pxp, label="PXP", lw=2)
+    axes[1].plot(times, s_ising, label="Mixed-field Ising", lw=2)
+    axes[1].set_xlabel("t")
+    axes[1].set_ylabel("Half-chain entanglement entropy")
+    axes[1].grid(alpha=0.3)
+    axes[1].legend()
+
+    plt.tight_layout()
+    plt.savefig("quench_L12_comparison.png", dpi=180)
     plt.show()
 
-# Example:
-computeIsing_fast(15, 20, J=1.0, hx=1.0, hz=0.5, Nmin=6)
+
+if __name__ == "__main__":
+    quench(L=12, t_max=30.0, n_times=1201, J=1.0, hx=1.0, hz=0.5)
