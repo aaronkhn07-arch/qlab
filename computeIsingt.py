@@ -10,6 +10,30 @@ def entropy(psi, n_A, N):
     t = s*s
     return -np.sum(t * np.log2(t))
 
+# def pxp(N):
+#     I = np.eye(2, dtype=np. complex128) # identity
+#     X = np.array([[0, 1], [1, 0]], dtype=np.complex128) # pauli x
+#     P = np.array([[1, 0], [0, 0]], dtype=np.complex128) # projector
+#     d = 2**N
+#     hamiltonian = np.zeros((d, d), dtype=np.complex128)
+#     for i in range(N):
+#         operators = [I] * N
+#         operators[i] = X # flip the site of interest
+        
+#         if i-1 >= 0:
+#             operators[i-1] = P
+#         if i+1 < N:
+#             operators[i+1] = P
+        
+#         out = operators[0] # start with identity and use the Kronecker product to add in the other states
+#         for operator in operators[1:]:
+#             out = np.kron(out, operator)
+#         hamiltonian += out
+#     return 
+
+def pxp_bitwise(N):
+    dim = 1 << L
+
 def make_ising_linop(L, J=1.0, hx=1.0, hz=0.5, dtype=np.complex128):
     dim = 1 << L
 
