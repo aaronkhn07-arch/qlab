@@ -10,26 +10,26 @@ def entropy(psi, n_A, N):
     t = s*s
     return -np.sum(t * np.log2(t))
 
-# def pxp(N):
-#     I = np.eye(2, dtype=np. complex128) # identity
-#     X = np.array([[0, 1], [1, 0]], dtype=np.complex128) # pauli x
-#     P = np.array([[1, 0], [0, 0]], dtype=np.complex128) # projector
-#     d = 2**N
-#     hamiltonian = np.zeros((d, d), dtype=np.complex128)
-#     for i in range(N):
-#         operators = [I] * N
-#         operators[i] = X # flip the site of interest
+def pxp(N):
+    I = np.eye(2, dtype=np. complex128) # identity
+    X = np.array([[0, 1], [1, 0]], dtype=np.complex128) # pauli x
+    P = np.array([[1, 0], [0, 0]], dtype=np.complex128) # projector
+    d = 2**N
+    hamiltonian = np.zeros((d, d), dtype=np.complex128)
+    for i in range(N):
+        operators = [I] * N
+        operators[i] = X # flip the site of interest
         
-#         if i-1 >= 0:
-#             operators[i-1] = P
-#         if i+1 < N:
-#             operators[i+1] = P
+        if i-1 >= 0:
+            operators[i-1] = P
+        if i+1 < N:
+            operators[i+1] = P
         
-#         out = operators[0] # start with identity and use the Kronecker product to add in the other states
-#         for operator in operators[1:]:
-#             out = np.kron(out, operator)
-#         hamiltonian += out
-#     return 
+        out = operators[0] # start with identity and use the Kronecker product to add in the other states
+        for operator in operators[1:]:
+            out = np.kron(out, operator)
+        hamiltonian += out
+    return hamiltonian
 
 def pxp_bitwise(N):
     dim = 1 << N
@@ -37,12 +37,11 @@ def pxp_bitwise(N):
     for s in range(dim):
         for i in range(N):
             left_ok = (i == 0) or (((s >> (i - 1)) & 1) == 0) # check left neighbor
-            right_ok = (i == L - 1) or (((s >> (i + 1)) & 1) == 0) # check right neighbor
+            right_ok = (i == N - 1) or (((s >> (i + 1)) & 1) == 0) # check right neighbor
             if left_ok and right_ok:
                 sf = s ^ (1 << i) # flip the ith bit
                 h[sf, s] += 1.0
     return h
-
 
 def mf_ising(
     L: int, J: float = 1.0, hx: float = 1.0, hz: float = 0.5
@@ -65,7 +64,6 @@ def mf_ising(
         h[s, s] += e_diag
     return h
 
-
 def z2_state(L: int) -> np.ndarray:
     """|Z2> = |1010...10> for even L."""
     dim = 1 << L
@@ -76,7 +74,6 @@ def z2_state(L: int) -> np.ndarray:
     psi = np.zeros(dim, dtype=np.complex128)
     psi[state_index] = 1.0
     return psi
-
 
 def precompute_diag(L: int) -> np.ndarray:
     """Diagonal entries of mean domain-wall density operator."""
@@ -91,7 +88,6 @@ def precompute_diag(L: int) -> np.ndarray:
         dw[s] = total / (L - 1)
     return dw
 
-
 def half_chain_entropy(psi: np.ndarray, L: int, eps: float = 1e-14) -> float:
     n_a = L // 2
     mat = psi.reshape((1 << n_a, 1 << (L - n_a)))
@@ -99,7 +95,6 @@ def half_chain_entropy(psi: np.ndarray, L: int, eps: float = 1e-14) -> float:
     probs = svals * svals
     probs = probs[probs > eps]
     return float(-np.sum(probs * np.log(probs)))
-
 
 def evolve_and_measure(
     hamiltonian: np.ndarray, psi0: np.ndarray, times: np.ndarray, domain_wall_diag: np.ndarray, L: int
@@ -112,7 +107,7 @@ def evolve_and_measure(
 
     for ti, t in enumerate(times):
         phase = np.exp(-1j * evals * t)
-        psi_t = evecs @ (phase * coeffs0)
+        psi_t = evecs @ (phase * coeffs0) # this line computes the time-evolved state |psi(t)> = sum_n e^{-i E_n t} <E_n|psi0> |E_n>
         probs = np.abs(psi_t) ** 2
         dw_curve[ti] = float(np.dot(probs, domain_wall_diag))
         ent_curve[ti] = half_chain_entropy(psi_t, L)
@@ -160,7 +155,6 @@ def quench(
     plt.tight_layout()
     plt.savefig("quench_L12_comparison.png", dpi=180)
     plt.show()
-
 
 if __name__ == "__main__":
     quench(L=12, t_max=30.0, n_times=1201, J=1.0, hx=1.0, hz=0.5)
