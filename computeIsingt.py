@@ -2,6 +2,50 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.sparse.linalg import eigsh, LinearOperator
 
+def valid_states(N):
+    valid = []
+    for s in range(1 << N):
+        if not (s & (s << 1)): # check for adjacent 1s
+            valid.append(s)
+    return valid
+
+def pxp_fib_sparse(N):
+    valid = valid_states(N)
+    dim = len(valid)
+    h = np.zeros((dim, dim), dtype=np.float64)
+    index_map = {s: i for i, s in enumerate(valid)} # bit int to row/col index
+
+    for i, s in enumerate(valid):
+        for j in range(N):
+            if (s & (1 << j)) == 0: # site j is 0, can flip to 1
+                left_ok = (j == 0) or ((s & (1 << (j - 1))) == 0) # check left neighbor
+                right_ok = (j == N - 1) or ((s & (1 << (j + 1))) == 0) # check right neighbor
+                if left_ok and right_ok:
+                    sf = s | (1 << j) # flip the jth bit to 1
+                    if sf in index_map:
+                        h[index_map[sf], i] += 1.0 # hamiltonian[row, col]++
+    return h
+
+def z2_fib(N, id):
+    s = sum(1 << i for i in range(0, N, 2)) # 1010...10
+    psi = np.zeros(len(id), dtype=np.complex128)
+    psi[id[s]] = 1.0
+    return psi
+
+def domain_wall_fib(L, valid):
+    dw = np.zeros(len(valid))
+    for i, s in enumerate(valid):
+        total = sum (0.5 * (1.0 - (1.0 if ((s >> j) & 1) == 0 else -1.0) * (1.0 if ((s >> (j + 1)) & 1) == 0 else -1.0)) for j in range(L - 1))
+        dw[i] = total / (L - 1)
+    return dw
+
+def embed(psi_fib, valid, N):
+    psi_full = np.zeros(1<<N, dtype=np.complex128)
+    for i, s in enumerate(valid):
+        psi_full[s] = psi_fib[i]
+    return psi_full
+
+
 def entropy(psi, n_A, N):
     dim_a = 2**n_A
     dim_b = 2**(N - n_A)
@@ -113,19 +157,43 @@ def evolve_and_measure(
         ent_curve[ti] = half_chain_entropy(psi_t, L)
     return dw_curve, ent_curve
 
+def evolve_and_measure_fib(
+    hamiltonian: np.ndarray, psi0: np.ndarray, times: np.ndarray, domain_wall_diag: np.ndarray,
+    valid: list, L: int
+) -> tuple[np.ndarray, np.ndarray]:
+    evals, evecs = np.linalg.eigh(hamiltonian)
+    coeffs0 = evecs.conj().T @ psi0
+
+    dw_curve = np.empty_like(times, dtype=np.float64)
+    ent_curve = np.empty_like(times, dtype=np.float64)
+
+    for ti, t in enumerate(times):
+        phase = np.exp(-1j * evals * t)
+        psi_t = evecs @ (phase * coeffs0)
+        probs = np.abs(psi_t) ** 2
+        dw_curve[ti] = float(np.dot(probs, domain_wall_diag))
+        ent_curve[ti] = half_chain_entropy(embed(psi_t, valid, L), L)
+    return dw_curve, ent_curve
+
 
 def quench(
     L: int = 12, t_max: float = 30.0, n_times: int = 1201, J: float = 1.0, hx: float = 1.0, hz: float = 0.5
 ) -> None:
     times = np.linspace(0.0, t_max, n_times)
-    psi0 = z2_state(L)
-    domain_wall_diag = precompute_diag(L)
 
-    h_pxp = pxp_bitwise(L)
+    valid = valid_states(L)
+    index_map = {s: i for i, s in enumerate(valid)}
+
+    h_pxp = pxp_fib_sparse(L)
+    psi0_pxp = z2_fib(L, index_map)
+    dw_diag_pxp = domain_wall_fib(L, valid)
+
+    psi0_ising = z2_state(L)
+    dw_diag_ising = precompute_diag(L)
     h_ising = mf_ising(L, J=J, hx=hx, hz=hz)
 
-    dw_pxp, s_pxp = evolve_and_measure(h_pxp, psi0, times, domain_wall_diag, L)
-    dw_ising, s_ising = evolve_and_measure(h_ising, psi0, times, domain_wall_diag, L)
+    dw_pxp, s_pxp = evolve_and_measure_fib(h_pxp, psi0_pxp, times, dw_diag_pxp, valid, L)
+    dw_ising, s_ising = evolve_and_measure(h_ising, psi0_ising, times, dw_diag_ising, L)
 
     np.savez(
         "quench_L12_data.npz",
