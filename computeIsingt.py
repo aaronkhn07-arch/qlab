@@ -1,6 +1,52 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.sparse.linalg import eigsh, LinearOperator
+from scipy.sparse import lil_matrix, csr_matrix, kron as spkron, eye as speye
+from scipy.sparse.linalg import eigsh, LinearOperator, expm_multiply
+
+def valid_states(N):
+    valid = []
+    for s in range(1 << N):
+        if not (s & (s << 1)): # check for adjacent 1s
+            valid.append(s)
+    return valid
+
+def pxp_fib_sparse(N):
+    valid = valid_states(N)
+    dim = len(valid)
+    h = lil_matrix((dim, dim), dtype=np.float64)
+    index_map = {s: i for i, s in enumerate(valid)}
+
+    for i, s in enumerate(valid):
+        for j in range(N):
+            left_ok = (j == 0) or (((s >> (j - 1)) & 1) == 0)
+            right_ok = (j == N - 1) or (((s >> (j + 1)) & 1) == 0)
+
+            if left_ok and right_ok:
+                sf = s ^ (1 << j)   # flip bit j in either direction
+                if sf in index_map:
+                    h[index_map[sf], i] += 1.0
+
+    return csr_matrix(h)
+
+def z2_fib(N, id):
+    s = sum(1 << i for i in range(0, N, 2)) # 1010...10
+    psi = np.zeros(len(id), dtype=np.complex128)
+    psi[id[s]] = 1.0
+    return psi
+
+def domain_wall_fib(L, valid):
+    dw = np.zeros(len(valid))
+    for i, s in enumerate(valid):
+        total = sum (0.5 * (1.0 - (1.0 if ((s >> j) & 1) == 0 else -1.0) * (1.0 if ((s >> (j + 1)) & 1) == 0 else -1.0)) for j in range(L - 1))
+        dw[i] = total / (L - 1)
+    return dw
+
+def embed(psi_fib, valid, N):
+    psi_full = np.zeros(1<<N, dtype=np.complex128)
+    for i, s in enumerate(valid):
+        psi_full[s] = psi_fib[i]
+    return psi_full
+
 
 def entropy(psi, n_A, N):
     dim_a = 2**n_A
@@ -11,29 +57,26 @@ def entropy(psi, n_A, N):
     return -np.sum(t * np.log2(t))
 
 def pxp(N):
-    I = np.eye(2, dtype=np. complex128) # identity
-    X = np.array([[0, 1], [1, 0]], dtype=np.complex128) # pauli x
-    P = np.array([[1, 0], [0, 0]], dtype=np.complex128) # projector
-    d = 2**N
-    hamiltonian = np.zeros((d, d), dtype=np.complex128)
+    I = speye(2, dtype=np.complex128, format='csr')
+    X = csr_matrix(np.array([[0, 1], [1, 0]], dtype=np.complex128))
+    P = csr_matrix(np.array([[1, 0], [0, 0]], dtype=np.complex128))
+    hamiltonian = csr_matrix((2**N, 2**N), dtype=np.complex128)
     for i in range(N):
         operators = [I] * N
         operators[i] = X # flip the site of interest
-        
         if i-1 >= 0:
             operators[i-1] = P
         if i+1 < N:
             operators[i+1] = P
-        
-        out = operators[0] # start with identity and use the Kronecker product to add in the other states
+        out = operators[0]
         for operator in operators[1:]:
-            out = np.kron(out, operator)
-        hamiltonian += out
+            out = spkron(out, operator, format='csr')
+        hamiltonian = hamiltonian + out
     return hamiltonian
 
 def pxp_bitwise(N):
     dim = 1 << N
-    h = np.zeros((dim, dim), dtype=np.float64)
+    h = lil_matrix((dim, dim), dtype=np.float64)
     for s in range(dim):
         for i in range(N):
             left_ok = (i == 0) or (((s >> (i - 1)) & 1) == 0) # check left neighbor
@@ -41,14 +84,14 @@ def pxp_bitwise(N):
             if left_ok and right_ok:
                 sf = s ^ (1 << i) # flip the ith bit
                 h[sf, s] += 1.0
-    return h
+    return csr_matrix(h)
 
 def mf_ising(
     L: int, J: float = 1.0, hx: float = 1.0, hz: float = 0.5
 ) -> np.ndarray:
     """Mixed-field Ising H = J sum_i Z_i Z_{i+1} + hx sum_i X_i + hz sum_i Z_i."""
     dim = 1 << L
-    h = np.zeros((dim, dim), dtype=np.float64)
+    h = lil_matrix((dim, dim), dtype=np.float64)
 
     for s in range(dim):
         e_diag = 0.0
@@ -62,7 +105,7 @@ def mf_ising(
             sf = s ^ (1 << i)
             h[sf, s] += hx
         h[s, s] += e_diag
-    return h
+    return csr_matrix(h)
 
 def z2_state(L: int) -> np.ndarray:
     """|Z2> = |1010...10> for even L."""
@@ -97,20 +140,38 @@ def half_chain_entropy(psi: np.ndarray, L: int, eps: float = 1e-14) -> float:
     return float(-np.sum(probs * np.log(probs)))
 
 def evolve_and_measure(
-    hamiltonian: np.ndarray, psi0: np.ndarray, times: np.ndarray, domain_wall_diag: np.ndarray, L: int
+    hamiltonian, psi0: np.ndarray, times: np.ndarray, domain_wall_diag: np.ndarray, L: int
 ) -> tuple[np.ndarray, np.ndarray]:
-    evals, evecs = np.linalg.eigh(hamiltonian)
-    coeffs0 = evecs.conj().T @ psi0
+    states = expm_multiply(
+        -1j * hamiltonian, psi0,
+        start=times[0], stop=times[-1], num=len(times), endpoint=True
+    )
 
-    dw_curve = np.empty_like(times, dtype=np.float64)
-    ent_curve = np.empty_like(times, dtype=np.float64)
+    dw_curve = np.empty(len(times), dtype=np.float64)
+    ent_curve = np.empty(len(times), dtype=np.float64)
 
-    for ti, t in enumerate(times):
-        phase = np.exp(-1j * evals * t)
-        psi_t = evecs @ (phase * coeffs0) # this line computes the time-evolved state |psi(t)> = sum_n e^{-i E_n t} <E_n|psi0> |E_n>
+    for ti, psi_t in enumerate(states):
         probs = np.abs(psi_t) ** 2
         dw_curve[ti] = float(np.dot(probs, domain_wall_diag))
         ent_curve[ti] = half_chain_entropy(psi_t, L)
+    return dw_curve, ent_curve
+
+def evolve_and_measure_fib(
+    hamiltonian, psi0: np.ndarray, times: np.ndarray, domain_wall_diag: np.ndarray,
+    valid: list, L: int
+) -> tuple[np.ndarray, np.ndarray]:
+    states = expm_multiply(
+        -1j * hamiltonian, psi0,
+        start=times[0], stop=times[-1], num=len(times), endpoint=True
+    )
+
+    dw_curve = np.empty(len(times), dtype=np.float64)
+    ent_curve = np.empty(len(times), dtype=np.float64)
+
+    for ti, psi_t in enumerate(states):
+        probs = np.abs(psi_t) ** 2
+        dw_curve[ti] = float(np.dot(probs, domain_wall_diag))
+        ent_curve[ti] = half_chain_entropy(embed(psi_t, valid, L), L)
     return dw_curve, ent_curve
 
 
@@ -118,14 +179,20 @@ def quench(
     L: int = 12, t_max: float = 30.0, n_times: int = 1201, J: float = 1.0, hx: float = 1.0, hz: float = 0.5
 ) -> None:
     times = np.linspace(0.0, t_max, n_times)
-    psi0 = z2_state(L)
-    domain_wall_diag = precompute_diag(L)
 
-    h_pxp = pxp_bitwise(L)
+    valid = valid_states(L)
+    index_map = {s: i for i, s in enumerate(valid)}
+
+    h_pxp = pxp_fib_sparse(L)
+    psi0_pxp = z2_fib(L, index_map)
+    dw_diag_pxp = domain_wall_fib(L, valid)
+
+    psi0_ising = z2_state(L)
+    dw_diag_ising = precompute_diag(L)
     h_ising = mf_ising(L, J=J, hx=hx, hz=hz)
 
-    dw_pxp, s_pxp = evolve_and_measure(h_pxp, psi0, times, domain_wall_diag, L)
-    dw_ising, s_ising = evolve_and_measure(h_ising, psi0, times, domain_wall_diag, L)
+    dw_pxp, s_pxp = evolve_and_measure_fib(h_pxp, psi0_pxp, times, dw_diag_pxp, valid, L)
+    dw_ising, s_ising = evolve_and_measure(h_ising, psi0_ising, times, dw_diag_ising, L)
 
     np.savez(
         "quench_L12_data.npz",
@@ -157,4 +224,16 @@ def quench(
     plt.show()
 
 if __name__ == "__main__":
-    quench(L=12, t_max=30.0, n_times=1201, J=1.0, hx=1.0, hz=0.5)
+    import cProfile
+    import pstats
+    import io
+
+    # pr = cProfile.Profile()
+    # pr.enable()
+    quench(L=16, t_max=30.0, n_times=1201, J=1.0, hx=1.0, hz=0.5)
+    # pr.disable()
+    #
+    # s = io.StringIO()
+    # ps = pstats.Stats(pr, stream=s).sort_stats("cumulative")
+    # ps.print_stats(20)
+    # print(s.getvalue())
