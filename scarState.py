@@ -227,17 +227,23 @@ def run_quench_experiment(
     psi0_pxp = z2_state_constrained(L, basis, state_to_idx)
     H_pxp = build_pxp_hamiltonian_constrained(L, basis, state_to_idx)
 
-    # Full-space Ising objects
-    psi0_ising = np.zeros(1 << L, dtype=np.complex128)
-    psi0_ising[z2_index(L)] = 1.0
-    H_ising = build_mixed_field_ising_hamiltonian(L, J=J, hx=hx, hz=hz)
+    zeroCnt = 0
+    zeroCnt = H_pxp.nnz
+    print (f"{zeroCnt/len(basis)**2:.3f}")
+    
+    print(f"Number of zero rows in H_pxp: {zeroCnt}")
+
+    # # Full-space Ising objects
+    # psi0_ising = np.zeros(1 << L, dtype=np.complex128)
+    # psi0_ising[z2_index(L)] = 1.0
+    # H_ising = build_mixed_field_ising_hamiltonian(L, J=J, hx=hx, hz=hz)
 
     dw_pxp, ent_pxp = evolve_and_measure_constrained(
         H_pxp, psi0_pxp, times, L, basis, density=density
     )
-    dw_ising, ent_ising = evolve_and_measure_full(
-        H_ising, psi0_ising, times, L, density=density
-    )
+    # dw_ising, ent_ising = evolve_and_measure_full(
+    #     H_ising, psi0_ising, times, L, density=density
+    # )
     endtime = time.time() - begintime
     print (f"Time: {endtime:.3f}")
 
@@ -246,14 +252,14 @@ def run_quench_experiment(
     ylabel_dw = "Domain wall density" if density else "Domain wall count"
 
     axes[0].plot(times, dw_pxp, label="PXP (constrained basis)", linewidth=2)
-    axes[0].plot(times, dw_ising, label=f"Mixed-field Ising\n(J={J}, hx={hx}, hz={hz})", linewidth=2)
+    #axes[0].plot(times, dw_ising, label=f"Mixed-field Ising\n(J={J}, hx={hx}, hz={hz})", linewidth=2)
     axes[0].set_ylabel(ylabel_dw)
     axes[0].set_title(f"Quantum quench from |Z2> for L={L}")
     axes[0].grid(True, alpha=0.3)
     axes[0].legend()
 
     axes[1].plot(times, ent_pxp, label="PXP (constrained basis)", linewidth=2)
-    axes[1].plot(times, ent_ising, label=f"Mixed-field Ising\n(J={J}, hx={hx}, hz={hz})", linewidth=2)
+    #axes[1].plot(times, ent_ising, label=f"Mixed-field Ising\n(J={J}, hx={hx}, hz={hz})", linewidth=2)
     axes[1].set_xlabel("t")
     axes[1].set_ylabel("Half-chain entanglement entropy (bits)")
     axes[1].grid(True, alpha=0.3)
@@ -262,42 +268,15 @@ def run_quench_experiment(
     plt.tight_layout()
     plt.show()
 
-    return times, dw_pxp, ent_pxp, dw_ising, ent_ising
-
-def slow_function():
-    # some slow code here
-    for _ in range(1000000):
-        pass
+    return times, dw_pxp, ent_pxp
 
 if __name__ == "__main__":
-    profiler = cProfile.Profile()
-    profiler.enable()  # Start profiling
     run_quench_experiment(
-        L=12,
+        L=20,
         tmax=30.0,
-        nt=600,
+        nt=100,
         J=1.0,
         hx=1.0,
         hz=0.5,
         density=True
     )
-    profiler.disable
-    s = io.StringIO()
-    sortby = SortKey.CUMULATIVE # Sort by cumulative time
-    ps = pstats.Stats(profiler, stream=s).sort_stats(sortby)
-    ps.print_stats()
-    print(s.getvalue())
-
-
-
-
-#     slow_function()  # Call the function to profile
-
-#     profiler.disable() # Stop profiling
-
-#     # Process and print the stats
-#     s = io.StringIO()
-#     sortby = SortKey.CUMULATIVE # Sort by cumulative time
-#     ps = pstats.Stats(profiler, stream=s).sort_stats(sortby)
-#     ps.print_stats()
-#     print(s.getvalue())
