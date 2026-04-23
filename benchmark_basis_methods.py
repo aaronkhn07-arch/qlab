@@ -29,7 +29,7 @@ for ll in (0, 1): # leftmost bit of left substring
 
 
 # Tree search
-def tree_search(L):d
+def tree_search(L):
     out = []
     def rec(i, prev, s):
         if i == L:
@@ -83,9 +83,7 @@ def verify(L_max=20):
     print(f"Verification passed for L = 1 .. {L_max}")
 
 
-# ===========================
-# Benchmark
-# ===========================
+# Benhchmark
 def benchmark(L_values, n_trials=5):
     results = {'L': [], 'bfs_time': [], 'dnc_time': [],
                'ratio': [], 'n_states': []}
@@ -119,9 +117,7 @@ def benchmark(L_values, n_trials=5):
     return results
 
 
-# ===========================
 # Plotting
-# ===========================
 def plot_results(results):
     L = np.array(results['L'], dtype=float)
 
