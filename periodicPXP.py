@@ -211,9 +211,13 @@ def diagonalize_k0_and_z2_overlaps(orbits, L, plot=False):
     return evals, overlaps, evecs, H0
 
 if __name__ == "__main__":
-    L = 26
+    L = 20
 
     basis = generate_pbc_basis(L)
     orbits = build_orbits(basis, L)
 
     diagonalize_k0_and_z2_overlaps(orbits, L, plot=True)
+
+    # Analytical k=0 and D_0^+ (reflection-symmetric) sector counts for L=101.
+    from extra import report_pxp_sector_dimensions
+    report_pxp_sector_dimensions(101, verify_with=[5, 7, 11, 13])
